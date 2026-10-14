@@ -4,8 +4,6 @@ Ask Claude or ChatGPT about your Rivian and every drive you take. It runs in you
 
 It only reads from Rivian. It sends no commands to your vehicle and changes no settings. This project is unofficial and not affiliated with or endorsed by Rivian.
 
-![Claude showing a recorded drive with its route on a map, distance, speed and elevation](docs/mcp-app.png)
-
 ## Self-host on Cloudflare
 
 You need:
