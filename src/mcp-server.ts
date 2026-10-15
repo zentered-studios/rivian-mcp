@@ -44,8 +44,8 @@ function createServer() {
     {
       description: [
         'Sign in to Rivian with the RIVIAN_EMAIL and RIVIAN_PASSWORD set in the MCP server',
-        'configuration. Call it first, before any other rivian tool, and again after the session',
-        'expires. Takes no arguments. Replaces the current session and saves it to',
+        'configuration. Call it when no session is saved or after the session expires; a saved',
+        'session is restored on launch. Takes no arguments. Replaces the current session and saves it to',
         '~/.rivian-mcp/session.json. When Rivian requires two-step verification, it sends a code to',
         'your phone or email and the sign-in stays pending until you pass the code to',
         'rivian_submit_otp. Returns a message saying either that you are signed in or that a code was',
