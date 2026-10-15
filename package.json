@@ -17,6 +17,7 @@
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit && tsc --noEmit -p worker && tsc --noEmit -p worker/ui",
     "lint": "biome check .",
+    "tdqs:worker-tools": "node scripts/dump-worker-tools.ts",
     "format": "biome check --write .",
     "test": "node --test 'test/*.test.ts' 'worker/test/*.test.ts'",
     "deploy": "wrangler deploy && wrangler d1 migrations apply DB --remote",

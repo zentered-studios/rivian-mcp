@@ -1,0 +1,52 @@
+name: TDQS
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'worker/src/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/tdqs.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'worker/src/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/tdqs.yml'
+permissions:
+  contents: read
+env:
+  MCP_TDQS: mcp-tdqs@0.2.0
+  # Scoring calls the hosted tdqs.dev model. Without the secret, only the lint steps run.
+  TDQS_API_KEY: ${{ secrets.TDQS_API_KEY }}
+jobs:
+  tdqs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          # The repo runs TypeScript through Node type stripping, which needs Node 24. mcp-tdqs needs 22+.
+          node-version: '24.x'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run tdqs:worker-tools -- "$RUNNER_TEMP/tools-worker.json"
+      - name: Lint stdio server tools
+        run: npx -y "$MCP_TDQS" lint --command "node ./dist/mcp-server.js" --fail-on warning
+      - name: Lint Worker tools
+        run: npx -y "$MCP_TDQS" lint --file "$RUNNER_TEMP/tools-worker.json" --fail-on warning
+      - name: Score stdio server tools
+        if: env.TDQS_API_KEY != ''
+        run: |
+          echo "## TDQS score: stdio server" >> "$GITHUB_STEP_SUMMARY"
+          npx -y "$MCP_TDQS" score --command "node ./dist/mcp-server.js" --hosted https://tdqs.dev --fail-under A --format markdown >> "$GITHUB_STEP_SUMMARY"
+      - name: Score Worker tools
+        if: env.TDQS_API_KEY != ''
+        run: |
+          echo "## TDQS score: Cloudflare Worker" >> "$GITHUB_STEP_SUMMARY"
+          npx -y "$MCP_TDQS" score --file "$RUNNER_TEMP/tools-worker.json" --hosted https://tdqs.dev --fail-under A --format markdown >> "$GITHUB_STEP_SUMMARY"
