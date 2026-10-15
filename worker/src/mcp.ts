@@ -35,6 +35,10 @@ export const km = (m: number) => `${(m / 1000).toFixed(1)} km`
 const kmh = (mps: number) => `${Math.round(mps * 3.6)} km/h`
 export const iso = utcIso
 
+/** Shared closing sentence for tools that read only recorded data. */
+export const RECORDED_READ_ONLY =
+  'Read-only: it reads recorded data from the recorder database, calls no Rivian API and sends no command to the vehicle.'
+
 const dateArg = (what: string) =>
   z
     .string()
@@ -147,8 +151,8 @@ export function registerTools(server: McpServer, env: Env): void {
         `coarse routes). Drives under ${DEFAULT_MIN_DISTANCE_KM} km are hidden unless min_distance_km is`,
         'lower. Use it to find a drive id. For one route with its track use get_drive; to export for',
         'Roadbook use export_drive; for a visual card use show_drive. Returns text plus structured',
-        'data, and "No drives recorded" when nothing matches. Read-only: it reads recorded data from',
-        'the recorder database, calls no Rivian API and sends no command to the vehicle.',
+        'data, and "No drives recorded" when nothing matches.',
+        RECORDED_READ_ONLY,
       ].join(' '),
       inputSchema: z.object({
         limit: z
@@ -215,8 +219,8 @@ export function registerTools(server: McpServer, env: Env): void {
         '(source, UTC and local times, time zone, distance, duration, max speed, elevation, energy,',
         'start and end with coordinates and place labels, quality). Use it to inspect one route. To',
         'send a drive to Roadbook use export_drive; for a map card use show_drive. Returns "No drive',
-        'with id" when the id is unknown. Read-only: it reads recorded data from the recorder',
-        'database, calls no Rivian API and sends no command to the vehicle.',
+        'with id" when the id is unknown.',
+        RECORDED_READ_ONLY,
       ].join(' '),
       inputSchema: z.object({
         id: z.string().describe('Drive id from list_drives'),
@@ -251,8 +255,8 @@ export function registerTools(server: McpServer, env: Env): void {
         'LineString. `geojson` gives a Feature or FeatureCollection, `gpx` a GPX 1.1 track.',
         `A range stops at ${MAX_EXPORT_DRIVES} drives and says so. With no id, since or until it exports`,
         'the latest drive. A drive still in progress is refused. To browse drives first use',
-        'list_drives. Read-only: it reads recorded data from the recorder database, calls no Rivian',
-        'API and sends no command to the vehicle.',
+        'list_drives.',
+        RECORDED_READ_ONLY,
       ].join(' '),
       inputSchema: z.object({
         id: z.string().optional().describe('Drive id from list_drives; omit for the latest drive'),

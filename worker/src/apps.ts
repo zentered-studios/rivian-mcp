@@ -23,7 +23,7 @@ import type {
 } from './app-data.ts'
 import { batterySamples, DAY_MS, driveWindowSamples } from './battery.ts'
 import { geocodeKey, reverseGeocodeMany } from './geocode.ts'
-import { type DriveRow, iso, km, recorder } from './mcp.ts'
+import { type DriveRow, iso, km, RECORDED_READ_ONLY, recorder } from './mcp.ts'
 import { RVM_BATTERY, RVM_CHARGE_BREAKDOWN } from './parallax.ts'
 import { DAILY_CAPACITY_SQL, STATS_POINTS_SQL } from './queries.ts'
 import {
@@ -122,8 +122,8 @@ export function registerApps(server: McpServer, env: Env): void {
         'duration, speed, energy, efficiency and elevation charts. Without an id it shows the latest',
         'drive. Use it to look at a drive; for the raw route data use get_drive, and to export use',
         'export_drive. Also returns a text summary and structured data. Returns "No drive" when none',
-        'matches. Read-only: it reads recorded data from the recorder database, calls no Rivian',
-        'API and sends no command to the vehicle.',
+        'matches.',
+        RECORDED_READ_ONLY,
       ].join(' '),
       inputSchema: z.object({
         id: z
@@ -160,8 +160,8 @@ export function registerApps(server: McpServer, env: Env): void {
         'day, efficiency, every route on one map, the drive list and battery capacity over time.',
         'Drives flagged as GPS noise are left out and counted in the text summary. Use it for an',
         'overview of many drives; for one drive use show_drive, for a list as text use list_drives.',
-        'Also returns a text summary and structured data. Read-only: it reads recorded data from',
-        'the recorder database, calls no Rivian API and sends no command to the vehicle.',
+        'Also returns a text summary and structured data.',
+        RECORDED_READ_ONLY,
       ].join(' '),
       inputSchema: daysInput(365),
       annotations: { readOnlyHint: true },
@@ -193,9 +193,8 @@ export function registerApps(server: McpServer, env: Env): void {
         'state of charge in the recorded battery samples, so a charge the recorder missed does not',
         'appear. Use it for charging trends; for a charge in progress use',
         'rivian_get_charging_session, and for the Rivian account history use',
-        'rivian_get_charging_history. Also returns a text summary and structured data. Read-only:',
-        'it reads recorded data from the recorder database, calls no Rivian API and sends no',
-        'command to the vehicle.',
+        'rivian_get_charging_history. Also returns a text summary and structured data.',
+        RECORDED_READ_ONLY,
       ].join(' '),
       inputSchema: daysInput(MAX_CHARGING_DAYS),
       annotations: { readOnlyHint: true },
