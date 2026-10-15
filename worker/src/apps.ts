@@ -59,7 +59,13 @@ const POWER_SAMPLE_MAX_AGE_MS = 5 * 60_000
 const ui = { ui: { resourceUri: APP_URI } }
 const daysInput = (max: number) =>
   z.object({
-    days: z.number().int().min(1).max(max).default(30).describe('Days back from now'),
+    days: z
+      .number()
+      .int()
+      .min(1)
+      .max(max)
+      .default(30)
+      .describe(`How many days back from now to include, from 1 to ${max}. Defaults to 30.`),
   })
 
 export function registerApps(server: McpServer, env: Env): void {
@@ -84,8 +90,16 @@ export function registerApps(server: McpServer, env: Env): void {
     server,
     'show_status',
     {
-      description:
-        'Show the vehicle status right now as a dashboard: a drawing of the vehicle with doors, closures, windows and tires, lock state, battery, range, charging, cabin temperature, location, software update status and anything that needs attention. Use for "Rivian status", "is my car locked", "how charged is it" or "is there an update".',
+      description: [
+        'Show the vehicle status right now as an interactive dashboard in the host: a drawing of the',
+        'vehicle with doors, closures, windows and tires, lock state, battery, range, charging,',
+        'cabin temperature, location, software update status and anything that needs attention.',
+        'Use it for "Rivian status", "is my car locked", "how charged is it" or "is there an',
+        'update". For the same facts as plain text use rivian_get_vehicle_state. Takes no',
+        'arguments; also returns a text summary and structured data for hosts without app support.',
+        'Reads the first vehicle on the account through the live Rivian API, and returns an error',
+        'when the recorder holds no signed-in session. Read-only: it sends no command to the vehicle.',
+      ].join(' '),
       annotations: READ_ONLY,
       _meta: ui,
     },
@@ -103,9 +117,20 @@ export function registerApps(server: McpServer, env: Env): void {
     server,
     'show_drive',
     {
-      description:
-        'Show one drive as a card with its route on a map, distance, duration, speed, energy, efficiency and elevation charts. Without an id, shows the latest drive.',
-      inputSchema: z.object({ id: z.string().optional().describe('Drive id from list_drives') }),
+      description: [
+        'Show one recorded drive as an interactive card in the host: its route on a map, distance,',
+        'duration, speed, energy, efficiency and elevation charts. Without an id it shows the latest',
+        'drive. Use it to look at a drive; for the raw route data use get_drive, and to export use',
+        'export_drive. Also returns a text summary and structured data. Returns "No drive" when none',
+        'matches. Read-only: it reads recorded data from the recorder database, calls no Rivian',
+        'API and sends no command to the vehicle.',
+      ].join(' '),
+      inputSchema: z.object({
+        id: z
+          .string()
+          .optional()
+          .describe('Drive id from list_drives. Omit to show the latest drive.'),
+      }),
       annotations: { readOnlyHint: true },
       _meta: ui,
     },
@@ -130,8 +155,14 @@ export function registerApps(server: McpServer, env: Env): void {
     server,
     'show_stats',
     {
-      description:
-        'Show driving stats for a period as a dashboard: totals, distance per day, efficiency, every route on one map, the drive list and battery capacity over time.',
+      description: [
+        'Show driving stats for a period as an interactive dashboard in the host: totals, distance per',
+        'day, efficiency, every route on one map, the drive list and battery capacity over time.',
+        'Drives flagged as GPS noise are left out and counted in the text summary. Use it for an',
+        'overview of many drives; for one drive use show_drive, for a list as text use list_drives.',
+        'Also returns a text summary and structured data. Read-only: it reads recorded data from',
+        'the recorder database, calls no Rivian API and sends no command to the vehicle.',
+      ].join(' '),
       inputSchema: daysInput(365),
       annotations: { readOnlyHint: true },
       _meta: ui,
@@ -156,8 +187,16 @@ export function registerApps(server: McpServer, env: Env): void {
     server,
     'show_charging',
     {
-      description:
-        'Show charging sessions for a period with energy added, average and peak power, and SoC and power curves. Sessions come from rising SoC.',
+      description: [
+        'Show recorded charging sessions for a period as an interactive view in the host: energy',
+        'added, average and peak power, and SoC and power curves. Sessions are detected from rising',
+        'state of charge in the recorded battery samples, so a charge the recorder missed does not',
+        'appear. Use it for charging trends; for a charge in progress use',
+        'rivian_get_charging_session, and for the Rivian account history use',
+        'rivian_get_charging_history. Also returns a text summary and structured data. Read-only:',
+        'it reads recorded data from the recorder database, calls no Rivian API and sends no',
+        'command to the vehicle.',
+      ].join(' '),
       inputSchema: daysInput(MAX_CHARGING_DAYS),
       annotations: { readOnlyHint: true },
       _meta: ui,
