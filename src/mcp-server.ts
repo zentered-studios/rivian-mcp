@@ -42,8 +42,15 @@ function createServer() {
   server.registerTool(
     'rivian_login',
     {
-      description:
-        'Sign in to Rivian. If Rivian sends a verification code to your phone or email, submit it with rivian_submit_otp.',
+      description: [
+        'Sign in to Rivian with the RIVIAN_EMAIL and RIVIAN_PASSWORD set in the MCP server',
+        'configuration. Call it when no session is saved or after the session expires; a saved',
+        'session is restored on launch. Takes no arguments. Replaces the current session and saves it to',
+        '~/.rivian-mcp/session.json. When Rivian requires two-step verification, it sends a code to',
+        'your phone or email and the sign-in stays pending until you pass the code to',
+        'rivian_submit_otp. Returns a message saying either that you are signed in or that a code was',
+        'sent, and an error if the credentials are missing or Rivian rejects them.',
+      ].join(' '),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     async () => {
@@ -77,9 +84,20 @@ function createServer() {
   server.registerTool(
     'rivian_submit_otp',
     {
-      description:
-        'Complete Rivian sign-in with the verification code sent to your phone or email.',
-      inputSchema: z.object({ otp_code: z.string().describe('The verification code') }),
+      description: [
+        'Finish a Rivian sign-in with the verification code Rivian sent to your phone or email. Use it',
+        'only after rivian_login reported that a code was sent; without a pending sign-in it returns',
+        'an error and asks you to call rivian_login. On success it saves the session to',
+        '~/.rivian-mcp/session.json. Uses the RIVIAN_EMAIL set in the MCP server configuration.',
+        'Returns a message saying you are signed in, or an error if Rivian rejects the code.',
+      ].join(' '),
+      inputSchema: z.object({
+        otp_code: z
+          .string()
+          .describe(
+            'The verification code exactly as Rivian sent it, as a string, for example "123456". Do not include spaces.',
+          ),
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     async ({ otp_code }) => {

@@ -35,7 +35,16 @@ export const km = (m: number) => `${(m / 1000).toFixed(1)} km`
 const kmh = (mps: number) => `${Math.round(mps * 3.6)} km/h`
 export const iso = utcIso
 
-const dateArg = (what: string) => z.string().date().optional().describe(`${what} (YYYY-MM-DD, UTC)`)
+/** Shared closing sentence for tools that read only recorded data. */
+export const RECORDED_READ_ONLY =
+  'Read-only: it reads recorded data from the recorder database, calls no Rivian API and sends no command to the vehicle.'
+
+const dateArg = (what: string) =>
+  z
+    .string()
+    .date()
+    .optional()
+    .describe(`${what}. Format YYYY-MM-DD, read as a UTC day, for example 2026-03-01.`)
 const maxPointsArg = (fallback: number) =>
   z
     .number()
@@ -43,7 +52,9 @@ const maxPointsArg = (fallback: number) =>
     .min(2)
     .max(MAX_POINTS)
     .default(fallback)
-    .describe('Most route points to return; the track is simplified (Douglas-Peucker) to fit')
+    .describe(
+      `Most route points to return, from 2 to ${MAX_POINTS}. The route is simplified (Douglas-Peucker) to fit. Defaults to ${fallback}.`,
+    )
 
 /** Human summary of a drive for the text content: places, local times, stats, quality. */
 export function describeDrive(d: DriveFacts, open: boolean): string {
@@ -106,7 +117,14 @@ export function registerTools(server: McpServer, env: Env): void {
   server.registerTool(
     'recorder_status',
     {
-      description: 'Show whether the recorder is logged in and connected, and any open drive.',
+      description: [
+        'Show whether the recorder holds a signed-in Rivian session and is connected to the live feed,',
+        'the vehicles it knows, the time of the last message, any drive still open with its distance so',
+        'far, and the last error. Use it first when drives or charging data look missing or stale. For',
+        'recorded drives use list_drives; for live vehicle readings use rivian_get_vehicle_state.',
+        'Takes no arguments and returns readable text. Read-only: it reads recorder state, calls no',
+        'Rivian API and sends no command to the vehicle.',
+      ].join(' '),
       annotations: { readOnlyHint: true },
     },
     async () => {
@@ -127,21 +145,32 @@ export function registerTools(server: McpServer, env: Env): void {
     'list_drives',
     {
       description: [
-        'List recorded drives, newest first, each with start and end place (neighborhood, city, region),',
-        'local start and end time, distance, max speed, elevation gain and loss, energy used, and a',
-        'quality line (GPS fix density; NOISE for parked drift, SPARSE for coarse routes). Drives under',
-        `${DEFAULT_MIN_DISTANCE_KM} km are hidden unless min_distance_km is lower. To add a drive to`,
-        'Roadbook, call export_drive with its id and pass the payload to Roadbook import_drive.',
+        'List drives the recorder captured, newest first, each with id, start and end place',
+        '(neighborhood, city, region), local start and end time, distance, max speed, elevation gain and',
+        'loss, energy used, and a quality line (GPS fix density; NOISE for parked drift, SPARSE for',
+        `coarse routes). Drives under ${DEFAULT_MIN_DISTANCE_KM} km are hidden unless min_distance_km is`,
+        'lower. Use it to find a drive id. For one route with its track use get_drive; to export for',
+        'Roadbook use export_drive; for a visual card use show_drive. Returns text plus structured',
+        'data, and "No drives recorded" when nothing matches.',
+        RECORDED_READ_ONLY,
       ].join(' '),
       inputSchema: z.object({
-        limit: z.number().int().min(1).max(100).default(20),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .default(20)
+          .describe('Most drives to return, from 1 to 100. Defaults to 20.'),
         since: dateArg('Only drives on or after this date'),
         until: dateArg('Only drives on or before this date'),
         min_distance_km: z
           .number()
           .min(0)
           .default(DEFAULT_MIN_DISTANCE_KM)
-          .describe('Hide drives shorter than this; 0 shows everything including GPS noise'),
+          .describe(
+            `Hide drives shorter than this many kilometers, for example 5. 0 shows everything including GPS noise. Defaults to ${DEFAULT_MIN_DISTANCE_KM}.`,
+          ),
       }),
       annotations: { readOnlyHint: true },
     },
@@ -185,10 +214,13 @@ export function registerTools(server: McpServer, env: Env): void {
     'get_drive',
     {
       description: [
-        'Get one drive: the summary from list_drives plus a GeoJSON Feature whose geometry is the',
-        'route as a LineString and whose properties carry the roadbook.drive/1 fields (source, UTC and',
-        'local times, time zone, distance, duration, max speed, elevation, energy, start and end with',
-        'coordinates and place labels, quality). For a payload to send to Roadbook use export_drive.',
+        'Get one recorded drive by id: the summary line from list_drives plus a GeoJSON Feature. Its',
+        'geometry is the route as a LineString; its properties carry the roadbook.drive/1 fields',
+        '(source, UTC and local times, time zone, distance, duration, max speed, elevation, energy,',
+        'start and end with coordinates and place labels, quality). Use it to inspect one route. To',
+        'send a drive to Roadbook use export_drive; for a map card use show_drive. Returns "No drive',
+        'with id" when the id is unknown.',
+        RECORDED_READ_ONLY,
       ].join(' '),
       inputSchema: z.object({
         id: z.string().describe('Drive id from list_drives'),
@@ -213,26 +245,34 @@ export function registerTools(server: McpServer, env: Env): void {
     'export_drive',
     {
       description: [
-        'Export one drive, or every drive in a date range, as a ready-to-send payload. The default',
-        'format `roadbook` is the roadbook.drive/1 JSON that Roadbook import_drive accepts unchanged:',
-        'pass the whole object as its `drive` argument (a date range gives roadbook.drives/1 with a',
-        '`drives` array; pass that as `drives`), with an optional tripId to add to an existing trip.',
-        'Each drive carries source {system, id} for idempotency, UTC and local times with the time',
-        'zone, distance_km, duration_min, max_speed_kmh, elevation gain and loss, energy_kwh (null',
-        'when no battery sample is close enough), start and end {lat, lng, label, city, region,',
-        'country} and the route as a simplified GeoJSON LineString. No arguments exports the latest',
-        'drive. `geojson` gives a Feature or FeatureCollection, `gpx` a GPX 1.1 track file.',
+        'Export one finished drive, or every finished drive in a date range, as a payload to hand to',
+        'another tool or save. The default format `roadbook` is the roadbook.drive/1 JSON that Roadbook',
+        'import_drive accepts unchanged: pass the object as its `drive` argument (a date range gives',
+        'roadbook.drives/1; pass that as `drives`), with an optional tripId to add to an existing trip.',
+        'Each drive carries source {system, id} for idempotency, UTC and local times, distance_km,',
+        'duration_min, max_speed_kmh, elevation gain and loss, energy_kwh (null without a close battery',
+        'sample), start and end {lat, lng, label, city, region, country} and a simplified GeoJSON',
+        'LineString. `geojson` gives a Feature or FeatureCollection, `gpx` a GPX 1.1 track.',
+        `A range stops at ${MAX_EXPORT_DRIVES} drives and says so. With no id, since or until it exports`,
+        'the latest drive. A drive still in progress is refused. To browse drives first use',
+        'list_drives.',
+        RECORDED_READ_ONLY,
       ].join(' '),
       inputSchema: z.object({
         id: z.string().optional().describe('Drive id from list_drives; omit for the latest drive'),
         since: dateArg('Export every drive from this date'),
         until: dateArg('Export every drive up to this date (no upper date bound when omitted)'),
-        format: z.enum(['roadbook', 'geojson', 'gpx']).default('roadbook'),
+        format: z
+          .enum(['roadbook', 'geojson', 'gpx'])
+          .default('roadbook')
+          .describe(
+            'Output format: roadbook (roadbook.drive/1 JSON), geojson (Feature or FeatureCollection) or gpx (GPX 1.1 track). Defaults to roadbook.',
+          ),
         max_points: maxPointsArg(DEFAULT_EXPORT_POINTS),
         include_noise: z
           .boolean()
           .default(false)
-          .describe('Also export drives flagged as parked GPS noise'),
+          .describe('Also export drives flagged as parked GPS noise. Defaults to false.'),
       }),
       annotations: { readOnlyHint: true },
     },
