@@ -1,4 +1,5 @@
 ---
+
 name: rivian-api
 description: Use for Rivian GraphQL queries, vehicle state fields, MCP tools, formatters and API errors in this repository.
 ---
@@ -14,16 +15,16 @@ Forbidden: `sendVehicleCommand`, `setVehicleName`, `setChargingSchedules`, any w
 
 ## Architecture
 
-| File                | Purpose                                             |
-| ------------------- | --------------------------------------------------- |
-| `src/rivian-api.ts` | All API interaction - session state, queries, auth  |
-| `src/format.ts`     | Human-readable output for MCP/CLI                   |
-| `src/session.ts`    | Session persistence to `~/.rivian-mcp/session.json` |
-| `src/mcp-server.ts`     | Stdio MCP entry point, authentication tools and session restore |
-| `src/tools.ts` | Live query tools shared by stdio and the Worker |
-| `worker/src/recorder.ts` | Durable Object recorder and live websocket subscriptions |
-| `src/cli.ts`            | CLI - `ota` and `stats` commands                    |
-| `src/prompt.ts` | Terminal-only masked password and OTP input |
+| File                     | Purpose                                                         |
+| ------------------------ | --------------------------------------------------------------- |
+| `src/rivian-api.ts`      | All API interaction - session state, queries, auth              |
+| `src/format.ts`          | Human-readable output for MCP/CLI                               |
+| `src/session.ts`         | Session persistence to `~/.rivian-mcp/session.json`             |
+| `src/mcp-server.ts`      | Stdio MCP entry point, authentication tools and session restore |
+| `src/tools.ts`           | Live query tools shared by stdio and the Worker                 |
+| `worker/src/recorder.ts` | Durable Object recorder and live websocket subscriptions        |
+| `src/cli.ts`             | CLI - `ota` and `stats` commands                                |
+| `src/prompt.ts`          | Terminal-only masked password and OTP input                     |
 
 ## API Endpoints
 
@@ -125,7 +126,7 @@ Returns `invitedUsers` (provisioned + unprovisioned) with enrolled devices.
 4. Handler pattern (`query` obtains authentication from `QueryContext` and returns errors with `isError: true`):
 
 ```ts
-({ param }) =>
+;({ param }) =>
   query(async (session) => {
     const vehicleId = await ctx.vehicleId(session)
     return format.formatMyThing(await rivian.getMyThing(session, vehicleId, param))
