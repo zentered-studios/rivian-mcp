@@ -24,6 +24,8 @@ import {
   shouldClose,
 } from './drive.ts'
 import {
+  type CodeCheck,
+  type FinishResult,
   finishPending,
   type LoginDeps,
   ownerEmail,
@@ -44,7 +46,8 @@ import {
   RVM_POWER,
   RVMS,
 } from './parallax.ts'
-import type { PendingLogin } from './pending.ts'
+import type { PendingAuthorization, PendingLogin } from './pending.ts'
+import { completeSignIn } from './provider.ts'
 import {
   pointFromVehicleState,
   STATE_ID_PREFIX,
@@ -105,20 +108,31 @@ export class Recorder extends DurableObject<Env> {
   /**
    * OAuth sign-in. The typed password logs in to a separate session; the recording session is
    * replaced only once Rivian accepts it, so abandoned or overlapping sign-ins change nothing.
-   * Returns a `pendingId` for `finishPendingLogin` when Rivian wants a code.
+   * Returns a `pendingId` for `finishPendingLogin` when Rivian wants a code. `oauth` is kept with
+   * the pending login, so the code step can complete the authorization here.
    */
-  async startPendingLogin(email: string, password: string): Promise<StartResult> {
-    return startPending(this.loginDeps(), email, password)
+  async startPendingLogin(
+    email: string,
+    password: string,
+    oauth: PendingAuthorization,
+  ): Promise<StartResult> {
+    return startPending(this.loginDeps(), email, password, oauth)
   }
 
   /**
-   * Verifies the code against the pending session, then makes it the recording session.
+   * Verifies the code against the pending session, makes it the recording session and issues the
+   * authorization code. Repeated submissions share one check and get the same redirect.
    * A wrong code throws and keeps the pending session for another try. A startup failure after a
    * valid code does not throw: the login is done, the alarm retries, and `status().lastError`
-   * shows the failure.
+   * shows the failure. The check runs here, not in the Worker request, so it finishes even when
+   * the browser drops the request that started it.
    */
-  async finishPendingLogin(pendingId: string, code: string): Promise<void> {
-    await finishPending(this.loginDeps(), pendingId, code)
+  async finishPendingLogin(
+    pendingId: string,
+    binding: string,
+    code: string,
+  ): Promise<FinishResult> {
+    return finishPending(this.loginDeps(), pendingId, binding, code)
   }
 
   /** See `ownerEmail` in logins.ts. */
@@ -126,7 +140,10 @@ export class Recorder extends DurableObject<Env> {
     return ownerEmail(this.env.RIVIAN_EMAIL, await this.ctx.storage.get<string>('owner'))
   }
 
-  private readonly pendingInFlight = new Set<string>()
+  private readonly pendingInFlight = new Map<string, CodeCheck>()
+  /** Replaced in tests, which have no OAuth KV. */
+  private completeSignIn = (oauth: PendingAuthorization) =>
+    completeSignIn(this.env, oauth.origin, oauth.request)
 
   private loginDeps(): LoginDeps {
     const storage = this.ctx.storage
@@ -143,7 +160,7 @@ export class Recorder extends DurableObject<Env> {
       },
       validateOtp,
       activate: (session, email) => this.activate(session, email),
-      configuredEmail: this.env.RIVIAN_EMAIL,
+      complete: (oauth) => this.completeSignIn(oauth),
       newSession: emptySession,
       now: Date.now,
       newId: () => crypto.randomUUID(),
