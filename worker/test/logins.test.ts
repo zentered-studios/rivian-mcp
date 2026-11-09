@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import type { AuthRequest } from '@cloudflare/workers-oauth-provider'
 import { emptySession, type Session } from '../../src/rivian-api.ts'
 import {
   finishPending,
@@ -11,7 +12,19 @@ import {
   sameEmail,
   startPending,
 } from '../src/logins.ts'
-import { PENDING_PREFIX, type PendingLogin } from '../src/pending.ts'
+import {
+  PENDING_PREFIX,
+  PENDING_TTL_MS,
+  type PendingAuthorization,
+  type PendingLogin,
+} from '../src/pending.ts'
+
+const BINDING = 'b'.repeat(64)
+const OAUTH: PendingAuthorization = {
+  request: { clientId: 'c' } as AuthRequest,
+  origin: 'https://worker.test',
+  binding: BINDING,
+}
 
 /** Fake Rivian: each login gets a distinct otpToken; a code is right only for its own token. */
 function setup() {
@@ -21,6 +34,7 @@ function setup() {
     email: null,
     writes: [],
   }
+  const counts = { validations: 0, completions: 0 }
   let n = 0
   const deps: LoginDeps = {
     store: {
@@ -41,6 +55,7 @@ function setup() {
       return true
     },
     validateOtp: async (session, _email, code) => {
+      counts.validations++
       if (code !== `code-for-${session.otpToken}`) throw new Error('bad code')
       session.userSessionToken = `user-${session.otpToken}`
       session.otpToken = ''
@@ -50,18 +65,43 @@ function setup() {
       active.email = email
       active.writes.push(session)
     },
+    complete: async (oauth) => {
+      counts.completions++
+      return `https://claude.ai/callback?client=${oauth.request.clientId}&n=${counts.completions}`
+    },
     newSession: emptySession,
     now: () => 1000,
     newId: () => `id${++n}`,
-    inFlight: new Set(),
+    inFlight: new Map(),
   }
-  return { deps, pending, active }
+  const start = (password: string) => startPending(deps, 'me@example.com', password, OAUTH)
+  const finish = (id: string, code: string, binding = BINDING) =>
+    finishPending(deps, id, binding, code)
+  return { deps, pending, active, counts, start, finish }
 }
 
+/** Holds every Rivian code check until the returned function runs. */
+function holdValidation(deps: LoginDeps) {
+  let release = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const original = deps.validateOtp
+  deps.validateOtp = async (session, email, code) => {
+    await gate
+    return original(session, email, code)
+  }
+  return () => release()
+}
+
+const FIRST_REDIRECT = 'https://claude.ai/callback?client=c&n=1'
+const DONE = { result: 'done', redirectTo: FIRST_REDIRECT }
+const OTHER_BROWSER = 'x'.repeat(64)
+
 test('starting overlapping sign-ins never writes the active session', async () => {
-  const { deps, pending, active } = setup()
-  const a = await startPending(deps, 'me@example.com', 'a')
-  const b = await startPending(deps, 'me@example.com', 'b')
+  const { pending, active, start } = setup()
+  const a = await start('a')
+  const b = await start('b')
   assert.deepEqual(
     [a, b],
     [
@@ -71,105 +111,144 @@ test('starting overlapping sign-ins never writes the active session', async () =
   )
   assert.equal(active.writes.length, 0)
   assert.equal(pending.size, 2)
+  assert.deepEqual(pending.get(`${PENDING_PREFIX}id1`)?.oauth, OAUTH)
 })
 
 test('a wrong code keeps the pending session and writes nothing', async () => {
-  const { deps, pending, active } = setup()
-  await startPending(deps, 'me@example.com', 'a')
-  await assert.rejects(finishPending(deps, 'id1', 'nope'), /bad code/)
+  const { pending, active, counts, start, finish } = setup()
+  await start('a')
+  await assert.rejects(finish('id1', 'nope'), /bad code/)
   assert.equal(active.writes.length, 0)
+  assert.equal(counts.completions, 0)
+  assert.ok(pending.has(`${PENDING_PREFIX}id1`))
+  // The same sign-in accepts the right code afterwards.
+  assert.deepEqual(await finish('id1', 'code-for-otp-a'), DONE)
+})
+
+test('a right code activates its own session and completes the authorization', async () => {
+  const { pending, active, counts, start, finish } = setup()
+  await start('a')
+  await start('b')
+  assert.deepEqual(await finish('id1', 'code-for-otp-a'), DONE)
+  assert.equal(active.writes.length, 1)
+  assert.equal(active.session?.userSessionToken, 'user-otp-a')
+  assert.equal(counts.completions, 1)
+  // The finished entry keeps the redirect, not the Rivian credentials.
+  const done = pending.get(`${PENDING_PREFIX}id1`)
+  assert.equal(done?.redirectTo, FIRST_REDIRECT)
+  assert.equal(done?.session.userSessionToken, '')
+  // The first sign-in's code does not work for the second.
+  await assert.rejects(finish('id2', 'code-for-otp-a'), /bad code/)
+  assert.equal(active.writes.length, 1)
+})
+
+test('a repeated post after success gets the same redirect without a second check', async () => {
+  const { active, counts, start, finish } = setup()
+  await start('a')
+  await finish('id1', 'code-for-otp-a')
+  assert.deepEqual(await finish('id1', 'code-for-otp-a'), DONE)
+  assert.deepEqual(counts, { validations: 1, completions: 1 })
+  assert.equal(active.writes.length, 1)
+})
+
+test('two posts of one code share a single check and get the same redirect', async () => {
+  const { deps, active, counts, start, finish } = setup()
+  await start('a')
+  const release = holdValidation(deps)
+  // Safari's autofill submit, then the second submit that drops the first request.
+  const first = finish('id1', 'code-for-otp-a')
+  const second = finish('id1', 'code-for-otp-a')
+  release()
+  assert.deepEqual(await Promise.all([first, second]), [DONE, DONE])
+  assert.deepEqual(counts, { validations: 1, completions: 1 })
+  assert.equal(active.writes.length, 1)
+  assert.equal(deps.inFlight.size, 0)
+})
+
+test('a different code while one is checked is refused', async () => {
+  const { deps, start, finish } = setup()
+  await start('a')
+  const release = holdValidation(deps)
+  const first = finish('id1', 'code-for-otp-a')
+  await assert.rejects(finish('id1', '999999'), /Another code is being checked/)
+  release()
+  assert.deepEqual(await first, DONE)
+})
+
+test('a post from another browser is refused, during and after a check', async () => {
+  const { deps, pending, active, counts, start, finish } = setup()
+  await start('a')
+  const release = holdValidation(deps)
+  const first = finish('id1', 'code-for-otp-a')
+  assert.deepEqual(await finish('id1', 'code-for-otp-a', OTHER_BROWSER), { result: 'expired' })
+  release()
+  await first
+  assert.deepEqual(await finish('id1', 'code-for-otp-a', OTHER_BROWSER), { result: 'expired' })
+  assert.deepEqual(counts, { validations: 1, completions: 1 })
+  assert.equal(active.writes.length, 1)
   assert.ok(pending.has(`${PENDING_PREFIX}id1`))
 })
 
-test('a right code activates only its own session and keeps the other pending login', async () => {
-  const { deps, pending, active } = setup()
-  await startPending(deps, 'me@example.com', 'a')
-  await startPending(deps, 'me@example.com', 'b')
-  await finishPending(deps, 'id1', 'code-for-otp-a')
-  assert.equal(active.writes.length, 1)
-  assert.equal(active.session?.userSessionToken, 'user-otp-a')
-  assert.deepEqual([...pending.keys()], [`${PENDING_PREFIX}id2`])
-  // The first sign-in's code does not work for the second.
-  await assert.rejects(finishPending(deps, 'id2', 'code-for-otp-a'), /bad code/)
-  assert.equal(active.writes.length, 1)
+test('a wrong binding never reaches Rivian', async () => {
+  const { active, counts, start, finish } = setup()
+  await start('a')
+  assert.deepEqual(await finish('id1', 'code-for-otp-a', OTHER_BROWSER), { result: 'expired' })
+  assert.equal(counts.validations, 0)
+  assert.equal(active.writes.length, 0)
 })
 
-test('a used or expired pending id is rejected', async () => {
-  const { deps } = setup()
-  await startPending(deps, 'me@example.com', 'a')
-  await finishPending(deps, 'id1', 'code-for-otp-a')
-  await assert.rejects(finishPending(deps, 'id1', 'code-for-otp-a'), /expired/)
+test('an unknown or expired pending id is rejected and removed', async () => {
+  const { deps, pending, counts, start, finish } = setup()
+  assert.deepEqual(await finish('missing', 'code-for-otp-a'), { result: 'expired' })
+  await start('a')
+  deps.now = () => 1000 + PENDING_TTL_MS
+  assert.deepEqual(await finish('id1', 'code-for-otp-a'), { result: 'expired' })
+  assert.equal(pending.size, 0)
+  assert.equal(counts.validations, 0)
+})
+
+test('a pending entry stored before the sign-in request was kept expires', async () => {
+  const { pending, active, counts, finish } = setup()
+  pending.set(`${PENDING_PREFIX}old`, {
+    session: { ...emptySession(), otpToken: 'otp-a' },
+    email: 'me@example.com',
+    createdAt: 1000,
+  })
+  assert.deepEqual(await finish('old', 'code-for-otp-a'), { result: 'expired' })
+  assert.equal(pending.size, 0)
+  assert.equal(counts.validations, 0)
+  assert.equal(active.writes.length, 0)
 })
 
 test('a password login without OTP activates directly', async () => {
-  const { deps, active } = setup()
-  assert.deepEqual(await startPending(deps, 'me@example.com', 'direct'), { result: 'logged_in' })
+  const { active, start } = setup()
+  assert.deepEqual(await start('direct'), { result: 'logged_in' })
   assert.equal(active.session?.userSessionToken, 'direct-token')
 })
 
-test('a second code check for the same id is refused while one runs', async () => {
-  const { deps, active } = setup()
-  await startPending(deps, 'me@example.com', 'a')
-  let release = () => {}
-  const original = deps.validateOtp
-  deps.validateOtp = async (session, email, code) => {
-    await new Promise<void>((resolve) => {
-      release = resolve
-    })
-    return original(session, email, code)
-  }
-  const first = finishPending(deps, 'id1', 'code-for-otp-a')
-  await new Promise((resolve) => setImmediate(resolve))
-  await assert.rejects(finishPending(deps, 'id1', 'code-for-otp-a'), /already being checked/)
-  release()
-  await first
-  assert.equal(active.writes.length, 1)
-})
-
 test('the email typed at sign-in reaches the code check and activation', async () => {
-  const { deps, active } = setup()
+  const { deps, active, start, finish } = setup()
   const checked: string[] = []
   const original = deps.validateOtp
   deps.validateOtp = async (session, email, code) => {
     checked.push(email)
     return original(session, email, code)
   }
-  await startPending(deps, 'me@example.com', 'a')
-  await finishPending(deps, 'id1', 'code-for-otp-a')
+  await start('a')
+  await finish('id1', 'code-for-otp-a')
   assert.deepEqual(checked, ['me@example.com'])
   assert.equal(active.email, 'me@example.com')
 })
 
-test('a refused activation leaves no pending entry to retry', async () => {
-  const { deps, pending } = setup()
+test('a refused activation leaves no pending entry and issues no code', async () => {
+  const { deps, pending, counts, start, finish } = setup()
   deps.activate = async () => {
     throw new Error('This server records a different Rivian account.')
   }
-  await startPending(deps, 'me@example.com', 'a')
-  await assert.rejects(finishPending(deps, 'id1', 'code-for-otp-a'), /different Rivian account/)
+  await start('a')
+  await assert.rejects(finish('id1', 'code-for-otp-a'), /different Rivian account/)
   assert.equal(pending.size, 0)
-})
-
-test('a pending entry stored without an email uses RIVIAN_EMAIL', async () => {
-  const { deps, pending, active } = setup()
-  deps.configuredEmail = ' owner@example.com '
-  pending.set(`${PENDING_PREFIX}old`, {
-    session: { ...emptySession(), otpToken: 'otp-a' },
-    createdAt: 0,
-  } as PendingLogin)
-  await finishPending(deps, 'old', 'code-for-otp-a')
-  assert.equal(active.email, 'owner@example.com')
-})
-
-test('a pending entry stored without an email expires when RIVIAN_EMAIL is unset', async () => {
-  const { deps, pending, active } = setup()
-  pending.set(`${PENDING_PREFIX}old`, {
-    session: { ...emptySession(), otpToken: 'otp-a' },
-    createdAt: 0,
-  } as PendingLogin)
-  await assert.rejects(finishPending(deps, 'old', 'code-for-otp-a'), /expired/)
-  assert.equal(pending.size, 0)
-  assert.equal(active.writes.length, 0)
+  assert.equal(counts.completions, 0)
 })
 
 test('the owner is RIVIAN_EMAIL when set, else the claimed email, else nobody', () => {
@@ -189,28 +268,6 @@ test('vehicle discovery retries only for a signed-in session with no vehicles', 
   assert.equal(needsVehicleDiscovery(signedIn, 0), true)
   assert.equal(needsVehicleDiscovery(signedIn, 1), false)
   assert.equal(needsVehicleDiscovery(emptySession(), 0), false)
-})
-
-test('two code checks started together run validateOtp once', async () => {
-  const { deps, active } = setup()
-  await startPending(deps, 'me@example.com', 'a')
-  let validations = 0
-  const original = deps.validateOtp
-  deps.validateOtp = async (session, email, code) => {
-    validations++
-    return original(session, email, code)
-  }
-  const results = await Promise.allSettled([
-    finishPending(deps, 'id1', 'code-for-otp-a'),
-    finishPending(deps, 'id1', 'code-for-otp-a'),
-  ])
-  assert.deepEqual(
-    results.map((r) => r.status),
-    ['fulfilled', 'rejected'],
-  )
-  assert.match(String((results[1] as PromiseRejectedResult).reason), /already being checked/)
-  assert.equal(validations, 1)
-  assert.equal(active.writes.length, 1)
 })
 
 function recovery(opts: { failures: number; socket?: boolean }) {
