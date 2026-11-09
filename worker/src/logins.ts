@@ -42,8 +42,17 @@ export interface CodeCheck {
 
 export type StartResult = { result: 'logged_in' } | { result: 'otp_sent'; pendingId: string }
 
-/** `expired`: the sign-in is gone, belongs to another browser, or predates the stored request. */
-export type FinishResult = { result: 'done'; redirectTo: string } | { result: 'expired' }
+/**
+ * `expired`: the sign-in is gone, belongs to another browser, or predates the stored request.
+ * `other_code`: this sign-in is checking, or already accepted, a different code.
+ * `retry`: the code was accepted but the authorization could not be issued; the same code
+ * resumes the sign-in.
+ */
+export type FinishResult =
+  | { result: 'done'; redirectTo: string }
+  | { result: 'expired' }
+  | { result: 'other_code' }
+  | { result: 'retry' }
 
 export async function startPending(
   deps: LoginDeps,
@@ -67,11 +76,12 @@ export async function startPending(
 /**
  * Verifies the code, activates the session and issues the authorization code, once per sign-in.
  * Browsers can submit the code form twice, for example when Safari fills the code from Messages.
- * A submission that arrives while a check runs waits for that check and gets its result, and one
- * that arrives after success gets the stored redirect. A wrong code throws and keeps the pending
- * session for another try.
+ * A submission that arrives while a check runs waits for that check and gets its result. Each
+ * step is stored, so a later submission of the same code resumes where the last one stopped:
+ * after success it gets the stored redirect. A wrong code throws and keeps the pending session
+ * for another try.
  */
-export function finishPending(
+export async function finishPending(
   deps: LoginDeps,
   pendingId: string,
   binding: string,
@@ -79,8 +89,8 @@ export function finishPending(
 ): Promise<FinishResult> {
   const running = deps.inFlight.get(pendingId)
   if (running) {
-    if (!sameBinding(running.binding, binding)) return Promise.resolve({ result: 'expired' })
-    if (running.code !== code) return Promise.reject(new Error('Another code is being checked.'))
+    if (!sameDigest(running.binding, binding)) return { result: 'expired' }
+    if (running.code !== code) return { result: 'other_code' }
     return running.result
   }
   // Registered before the first await, so a concurrent call always finds it.
@@ -104,34 +114,54 @@ async function checkCode(
     await deps.store.delete(key)
     return { result: 'expired' }
   }
-  if (!sameBinding(stored.oauth.binding, binding)) return { result: 'expired' }
-  if (stored.redirectTo) return { result: 'done', redirectTo: stored.redirectTo }
-  const { email } = stored
-  await deps.validateOtp(stored.session, email, code)
-  try {
-    await deps.activate(stored.session, email)
-  } catch (error) {
-    await deps.store.delete(key)
-    throw error
+  const { oauth } = stored
+  if (!sameDigest(oauth.binding, binding)) return { result: 'expired' }
+  const codeHash = await sha256Hex(code)
+  if (stored.verifiedCode && !sameDigest(stored.verifiedCode, codeHash)) {
+    return { result: 'other_code' }
   }
-  const redirectTo = await deps.complete(stored.oauth)
-  // Keep only what a repeated submission needs. The Rivian session now lives in the recorder.
-  await deps.store.put(key, {
-    session: deps.newSession(),
-    email,
-    createdAt: stored.createdAt,
-    oauth: stored.oauth,
-    redirectTo,
-  })
+  let entry: PendingLogin = stored
+  if (!entry.verifiedCode) {
+    // Rivian accepts a code once, so the verified session is stored before the next step.
+    await deps.validateOtp(entry.session, entry.email, code)
+    entry = { ...entry, verifiedCode: codeHash }
+    await deps.store.put(key, entry)
+  }
+  if (!entry.activated) {
+    try {
+      await deps.activate(entry.session, entry.email)
+    } catch (error) {
+      await deps.store.delete(key)
+      throw error
+    }
+    // The Rivian session now lives in the recorder.
+    entry = { ...entry, session: deps.newSession(), activated: true }
+    await deps.store.put(key, entry)
+  }
+  let { redirectTo } = entry
+  if (!redirectTo) {
+    try {
+      redirectTo = await deps.complete(oauth)
+    } catch (error) {
+      console.error('Sign-in authorization failed', error)
+      return { result: 'retry' }
+    }
+    await deps.store.put(key, { ...entry, redirectTo })
+  }
   return { result: 'done', redirectTo }
 }
 
 /** Constant-time comparison of two hex digests. */
-function sameBinding(a: string, b: string): boolean {
+function sameDigest(a: string, b: string): boolean {
   if (a.length !== b.length) return false
   let diff = 0
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
   return diff === 0
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 /** Rivian emails compare without case or surrounding spaces. */

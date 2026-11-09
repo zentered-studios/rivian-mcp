@@ -215,3 +215,22 @@ test('an expired sign-in or another browser ends on the failure page', async () 
   assert.equal(res.status, 400)
   assert.match(await res.text(), /expired or was started in another browser/)
 })
+
+test('a different code stays on the code page without blaming Rivian', async () => {
+  const t = setup({ finish: { result: 'other_code' } })
+  const res = await t.postCode('123456')
+  assert.equal(res.status, 200)
+  const html = await res.text()
+  assert.match(html, /already uses a different code/)
+  assert.doesNotMatch(html, /Rivian rejected/)
+})
+
+test('an accepted code whose authorization failed asks for the same code again', async () => {
+  const t = setup({ finish: { result: 'retry' } })
+  const res = await t.postCode('123456')
+  assert.equal(res.status, 200)
+  const html = await res.text()
+  assert.match(html, /Rivian accepted the code\. Submit it again to finish\./)
+  assert.match(html, new RegExp(`action="/authorize/otp\\?pending=${PENDING_ID}"`))
+  assert.equal(res.headers.getSetCookie().length, 0, 'keeps the sign-in cookie')
+})

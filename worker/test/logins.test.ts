@@ -170,9 +170,56 @@ test('a different code while one is checked is refused', async () => {
   await start('a')
   const release = holdValidation(deps)
   const first = finish('id1', 'code-for-otp-a')
-  await assert.rejects(finish('id1', '999999'), /Another code is being checked/)
+  assert.deepEqual(await finish('id1', '999999'), { result: 'other_code' })
   release()
   assert.deepEqual(await first, DONE)
+})
+
+test('a different code after success never gets the redirect', async () => {
+  const { counts, start, finish } = setup()
+  await start('a')
+  await finish('id1', 'code-for-otp-a')
+  assert.deepEqual(await finish('id1', '000000'), { result: 'other_code' })
+  assert.deepEqual(counts, { validations: 1, completions: 1 })
+})
+
+test('a failed authorization resumes with the same code without asking Rivian again', async () => {
+  const { deps, pending, active, counts, start, finish } = setup()
+  await start('a')
+  const complete = deps.complete
+  deps.complete = async () => {
+    throw new Error('KV unavailable')
+  }
+  assert.deepEqual(await finish('id1', 'code-for-otp-a'), { result: 'retry' })
+  assert.equal(active.writes.length, 1)
+  // The Rivian session moved to the recorder; the entry keeps only the resume state.
+  const stored = pending.get(`${PENDING_PREFIX}id1`)
+  assert.equal(stored?.activated, true)
+  assert.equal(stored?.session.userSessionToken, '')
+  assert.equal(stored?.redirectTo, undefined)
+  assert.deepEqual(await finish('id1', '000000'), { result: 'other_code' })
+  deps.complete = complete
+  // Rivian accepts a code once: the resumed check must not send it again.
+  assert.deepEqual(await finish('id1', 'code-for-otp-a'), DONE)
+  assert.equal(counts.validations, 1)
+  assert.equal(active.writes.length, 1)
+})
+
+test('a check lost after Rivian accepted the code resumes from the stored session', async () => {
+  const { deps, pending, active, counts, start, finish } = setup()
+  await start('a')
+  // Activation never ran, as when the Recorder restarts right after the code check.
+  const activate = deps.activate
+  deps.activate = () => new Promise<void>(() => {})
+  void finish('id1', 'code-for-otp-a')
+  const verified = () => pending.get(`${PENDING_PREFIX}id1`)?.verifiedCode
+  for (let i = 0; i < 100 && !verified(); i++) await new Promise((r) => setImmediate(r))
+  assert.ok(verified(), 'the accepted code is stored before activation')
+  deps.inFlight.clear()
+  deps.activate = activate
+  assert.deepEqual(await finish('id1', 'code-for-otp-a'), DONE)
+  assert.equal(counts.validations, 1)
+  assert.equal(active.session?.userSessionToken, 'user-otp-a')
 })
 
 test('a post from another browser is refused, during and after a check', async () => {

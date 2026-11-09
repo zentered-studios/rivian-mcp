@@ -170,8 +170,13 @@ async function submitOtp(request: Request, env: Env): Promise<Response> {
   } catch (error) {
     return otpPage(headers, pendingId, rivianError(error))
   }
-  if (finished.result === 'expired') {
-    return failed('This sign-in expired or was started in another browser.')
+  switch (finished.result) {
+    case 'expired':
+      return failed('This sign-in expired or was started in another browser.')
+    case 'other_code':
+      return otpPage(headers, pendingId, 'This sign-in already uses a different code.')
+    case 'retry':
+      return otpPage(headers, pendingId, 'Rivian accepted the code. Submit it again to finish.')
   }
   headers.append('Set-Cookie', clearCookie(pendingId))
   headers.set('Location', finished.redirectTo)

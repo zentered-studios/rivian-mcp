@@ -17,7 +17,11 @@ export interface PendingLogin {
   createdAt: number
   /** The OAuth sign-in this login belongs to. Entries from before it was stored are expired. */
   oauth?: PendingAuthorization
-  /** Set once the code is verified: a repeated submission gets the same redirect. */
+  /** SHA-256 hex of the code Rivian accepted. A later submission must carry the same code. */
+  verifiedCode?: string
+  /** Set once the session is the recording session. `session` is then empty. */
+  activated?: boolean
+  /** Set once the authorization code is issued: a repeated submission gets the same redirect. */
   redirectTo?: string
 }
 
