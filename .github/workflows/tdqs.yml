@@ -2,21 +2,21 @@ name: TDQS
 on:
   pull_request:
     paths:
-      - 'src/**'
-      - 'worker/src/**'
-      - 'scripts/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/tdqs.yml'
+      - "src/**"
+      - "worker/src/**"
+      - "scripts/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/tdqs.yml"
   push:
     branches: [main]
     paths:
-      - 'src/**'
-      - 'worker/src/**'
-      - 'scripts/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/tdqs.yml'
+      - "src/**"
+      - "worker/src/**"
+      - "scripts/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/tdqs.yml"
 permissions:
   contents: read
 env:
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           # The repo runs TypeScript through Node type stripping, which needs Node 24. mcp-tdqs needs 22+.
-          node-version: '24.x'
+          node-version: "24.x"
           cache: npm
       - run: npm ci
       - run: npm run build

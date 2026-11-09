@@ -21,16 +21,16 @@ Source and tests are TypeScript, run directly by Node's type stripping. Node doe
 
 ## Architecture
 
-| File | Responsibility |
-| --- | --- |
-| `src/mcp-server.ts` | Stdio entry point using MCP SDK v2 and `serveStdio`; registers login and shared query tools. A TTY on stdin runs the CLI. |
-| `src/cli.ts` | `ota` and `stats` terminal commands. |
-| `src/prompt.ts` | Masked password and OTP input. |
-| `src/tools.ts` | Seven live query tools shared by stdio and the Worker. `QueryContext` supplies the session and vehicle. |
+| File                | Responsibility                                                                                                             |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `src/mcp-server.ts` | Stdio entry point using MCP SDK v2 and `serveStdio`; registers login and shared query tools. A TTY on stdin runs the CLI.  |
+| `src/cli.ts`        | `ota` and `stats` terminal commands.                                                                                       |
+| `src/prompt.ts`     | Masked password and OTP input.                                                                                             |
+| `src/tools.ts`      | Seven live query tools shared by stdio and the Worker. `QueryContext` supplies the session and vehicle.                    |
 | `src/rivian-api.ts` | Rivian GraphQL requests. API functions take `Session` first. Schema references come from `bretterer/rivian-python-client`. |
-| `src/session.ts` | Load, save and expire `~/.rivian-mcp/session.json`. |
-| `src/format.ts` | Human-readable MCP and CLI responses. |
-| `src/ui.ts` | Terminal colors, progress bars, vehicle diagrams and tables. |
+| `src/session.ts`    | Load, save and expire `~/.rivian-mcp/session.json`.                                                                        |
+| `src/format.ts`     | Human-readable MCP and CLI responses.                                                                                      |
+| `src/ui.ts`         | Terminal colors, progress bars, vehicle diagrams and tables.                                                               |
 
 Every query tool sets `readOnlyHint: true`. The login tools `rivian_login` and `rivian_submit_otp` do not. Consult [.claude/skills/SKILL.md](.claude/skills/SKILL.md) for API endpoints, signatures and tested fields.
 
@@ -103,15 +103,15 @@ Close code 4420 reconnects after 2 seconds. Codes 4401 and 4403 clear the sessio
 
 ### Tools and views
 
-| Module | Responsibility |
-| --- | --- |
-| `mcp.ts` | Shared queries, `recorder_status`, `list_drives`, `get_drive` and `export_drive`. |
-| `enrich.ts` | Add places, energy and elevation to drive rows using `geocode.ts` and `battery.ts`. |
-| `export.ts` | Build `roadbook.drive/1`, GeoJSON and GPX. The schema is in [docs/roadbook.md](docs/roadbook.md). |
-| `simplify.ts`, `timezone.ts` | Pure route and time helpers. |
-| `apps.ts` | Register `show_status`, `show_drive`, `show_stats` and `show_charging`. |
-| `status.ts` | Build the `show_status` payload and text from live vehicle state. Pure. |
-| `worker/ui/` | Render the MCP Apps views. `npm run worker:build` bundles them into `worker/dist/app.html`. |
+| Module                       | Responsibility                                                                                    |
+| ---------------------------- | ------------------------------------------------------------------------------------------------- |
+| `mcp.ts`                     | Shared queries, `recorder_status`, `list_drives`, `get_drive` and `export_drive`.                 |
+| `enrich.ts`                  | Add places, energy and elevation to drive rows using `geocode.ts` and `battery.ts`.               |
+| `export.ts`                  | Build `roadbook.drive/1`, GeoJSON and GPX. The schema is in [docs/roadbook.md](docs/roadbook.md). |
+| `simplify.ts`, `timezone.ts` | Pure route and time helpers.                                                                      |
+| `apps.ts`                    | Register `show_status`, `show_drive`, `show_stats` and `show_charging`.                           |
+| `status.ts`                  | Build the `show_status` payload and text from live vehicle state. Pure.                           |
+| `worker/ui/`                 | Render the MCP Apps views. `npm run worker:build` bundles them into `worker/dist/app.html`.       |
 
 ### Storage, tests and presentation
 
