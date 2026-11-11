@@ -8,6 +8,7 @@ import './support/cloudflare-stub.ts'
 
 // The Recorder extends a class from `cloudflare:workers`, which the stub provides.
 const { Recorder } = await import('../src/recorder.ts')
+type Recorder = InstanceType<typeof Recorder>
 
 /** The members the tests reach into. They are private in the class. */
 interface Internals {
@@ -254,11 +255,25 @@ function acceptCodes() {
   }) as typeof fetch
 }
 
+const BINDING = 'b'.repeat(64)
+const REDIRECT = 'https://claude.ai/callback?code=c'
+
 const pendingLogin = (email: string) => ({
   session: { ...emptySession(), otpToken: 'otp' },
   email,
   createdAt: Date.now(),
+  oauth: { request: { clientId: 'c' }, origin: 'https://worker.test', binding: BINDING },
 })
+
+/** Tests have no OAuth KV, so authorization completion returns a fixed redirect. */
+function withCompletion<R extends Recorder>(recorder: R): R {
+  ;(recorder as unknown as { completeSignIn: () => Promise<string> }).completeSignIn = async () =>
+    REDIRECT
+  return recorder
+}
+
+const signIn = (recorder: Recorder, pendingId: string) =>
+  withCompletion(recorder).finishPendingLogin(pendingId, BINDING, '123456')
 
 test('the first sign-in claims the worker and a different account is then refused', async () => {
   acceptCodes()
@@ -267,7 +282,7 @@ test('the first sign-in claims the worker and a different account is then refuse
   await t.storage.put('pending:a', pendingLogin('First@Example.com'))
   await t.storage.put('pending:b', pendingLogin('other@example.com'))
   assert.equal(await t.recorder.ownerEmail(), null)
-  await t.recorder.finishPendingLogin('a', '123456')
+  assert.deepEqual(await signIn(t.recorder, 'a'), { result: 'done', redirectTo: REDIRECT })
   assert.equal(await t.recorder.ownerEmail(), 'first@example.com')
   const claimed = await t.storage.get('session')
 
@@ -275,9 +290,31 @@ test('the first sign-in claims the worker and a different account is then refuse
     { storage: t.storage, waitUntil() {} } as never,
     { DB: {}, RIVIAN_EMAIL: undefined } as never,
   )
-  await assert.rejects(restarted.finishPendingLogin('b', '123456'), /different Rivian account/)
+  await assert.rejects(signIn(restarted, 'b'), /different Rivian account/)
   assert.equal(await restarted.ownerEmail(), 'first@example.com')
   assert.deepEqual(await t.storage.get('session'), claimed)
+  assert.equal(((await t.storage.get('session')) as Session).userSessionToken, 'u')
+})
+
+test('two posts of one code reach Rivian once and get the same redirect', async () => {
+  acceptCodes()
+  const accept = globalThis.fetch
+  let otpCalls = 0
+  globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+    if (String(init?.body).includes('LoginWithOTP')) otpCalls++
+    return accept(url as string, init as RequestInit)
+  }) as typeof fetch
+  const t = await setup('owner@example.com')
+  await t.storage.put('pending:a', pendingLogin('owner@example.com'))
+  const done = { result: 'done', redirectTo: REDIRECT }
+  assert.deepEqual(await Promise.all([signIn(t.recorder, 'a'), signIn(t.recorder, 'a')]), [
+    done,
+    done,
+  ])
+  assert.equal(otpCalls, 1)
+  // A post that arrives after the check finished gets the stored redirect.
+  assert.deepEqual(await signIn(t.recorder, 'a'), done)
+  assert.equal(otpCalls, 1)
   assert.equal(((await t.storage.get('session')) as Session).userSessionToken, 'u')
 })
 
@@ -285,7 +322,7 @@ test('a configured RIVIAN_EMAIL refuses another account before it claims', async
   acceptCodes()
   const t = await setup('owner@example.com')
   await t.storage.put('pending:b', pendingLogin('other@example.com'))
-  await assert.rejects(t.recorder.finishPendingLogin('b', '123456'), /different Rivian account/)
+  await assert.rejects(signIn(t.recorder, 'b'), /different Rivian account/)
   assert.equal(t.storage.data.has('owner'), false)
   assert.equal(((await t.storage.get('session')) as Session).userSessionToken, 'token')
 })
@@ -294,7 +331,7 @@ test('the owner stays after RIVIAN_EMAIL is removed', async () => {
   acceptCodes()
   const t = await setup('Owner@Example.com')
   await t.storage.put('pending:a', pendingLogin('owner@example.com'))
-  await t.recorder.finishPendingLogin('a', '123456')
+  await signIn(t.recorder, 'a')
   const restarted = new Recorder(
     { storage: t.storage, waitUntil() {} } as never,
     { DB: {}, RIVIAN_EMAIL: undefined } as never,

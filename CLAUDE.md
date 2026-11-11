@@ -85,7 +85,9 @@ Keep `wrangler.jsonc` at the repository root and free of account or resource IDs
 
 ### Sign-in and ownership
 
-`worker/src/index.ts` wraps `/mcp` in `@cloudflare/workers-oauth-provider`. Each request origin gets its own provider because the OAuth resource URL uses that origin. OAuth state lives in `OAUTH_KV`.
+`worker/src/index.ts` wraps `/mcp` in `@cloudflare/workers-oauth-provider`. Each request origin gets its own provider because the OAuth resource URL uses that origin. `provider.ts` holds the options, shared with the Recorder. OAuth state lives in `OAUTH_KV`.
+
+The OTP post must stay safe to repeat: Safari posts it twice when it fills the code from Messages and drops the first request. Do not use the library's single-use `beginUpstream`/`finishUpstream` for it. The Recorder runs one code check per pending sign-in, completes the authorization itself and stores the redirect; a `__Host-` cookie binds the sign-in to the browser.
 
 `oauth.ts` serves `/authorize` for password entry, then OTP entry. Only the owner's email can sign in. The optional `RIVIAN_EMAIL` secret pins the owner; otherwise the first accepted sign-in claims ownership. `logins.ts` stores the email as `owner` in Recorder storage. The secret is typed in `worker/src/env.d.ts`.
 

@@ -2,7 +2,8 @@ import { type OAuthHelpers, OAuthProvider } from '@cloudflare/workers-oauth-prov
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server'
 import { registerApps } from './apps.ts'
 import { registerTools } from './mcp.ts'
-import { handleAuthorize, SCOPE } from './oauth.ts'
+import { handleAuthorize } from './oauth.ts'
+import { providerOptions } from './provider.ts'
 
 export { Recorder } from './recorder.ts'
 
@@ -28,24 +29,16 @@ const providers = new Map<string, OAuthProvider<Env>>()
 function oauthProvider(origin: string): OAuthProvider<Env> {
   let provider = providers.get(origin)
   if (!provider) {
-    provider = new OAuthProvider<Env>({
-      apiRoute: '/mcp',
-      apiHandler: mcpHandler,
-      defaultHandler: {
+    provider = new OAuthProvider<Env>(
+      providerOptions(origin, mcpHandler, {
         fetch: (request, env) =>
           handleAuthorize(
             request,
             env,
             (env as Env & { OAUTH_PROVIDER: OAuthHelpers }).OAUTH_PROVIDER,
           ),
-      },
-      authorizeEndpoint: '/authorize',
-      tokenEndpoint: '/oauth/token',
-      clientRegistrationEndpoint: '/oauth/register',
-      scopesSupported: [SCOPE],
-      requiredScopes: [SCOPE],
-      resourceMetadata: { resource: `${origin}/mcp`, resource_name: 'Rivian' },
-    })
+      }),
+    )
     providers.set(origin, provider)
   }
   return provider

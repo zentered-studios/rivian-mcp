@@ -9,3 +9,8 @@ export class DurableObject<E> {
 }
 
 export class WorkerEntrypoint {}
+
+/** Promises passed here run to completion in tests anyway; failures are ignored like the runtime does. */
+export function waitUntil(promise: Promise<unknown>): void {
+  promise.catch(() => {})
+}
