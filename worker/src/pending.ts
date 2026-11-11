@@ -1,6 +1,7 @@
 // Pending Rivian logins: each OAuth sign-in that needs an OTP keeps its own session until the
 // code is verified, so overlapping or abandoned sign-ins never touch the recording session.
 
+import type { AuthRequest } from '@cloudflare/workers-oauth-provider'
 import type { Session } from '../../src/rivian-api.ts'
 
 export const PENDING_PREFIX = 'pending:'
@@ -14,6 +15,23 @@ export interface PendingLogin {
   /** The email typed at sign-in. The code check and the owner claim use it. */
   email: string
   createdAt: number
+  /** The OAuth sign-in this login belongs to. Entries from before it was stored are expired. */
+  oauth?: PendingAuthorization
+  /** SHA-256 hex of the code Rivian accepted. A later submission must carry the same code. */
+  verifiedCode?: string
+  /** Set once the session is the recording session. `session` is then empty. */
+  activated?: boolean
+  /** Set once the authorization code is issued: a repeated submission gets the same redirect. */
+  redirectTo?: string
+}
+
+export interface PendingAuthorization {
+  /** The request `approveConsent()` validated at the password step. */
+  request: AuthRequest
+  /** The Worker origin, which names the OAuth resource. */
+  origin: string
+  /** SHA-256 hex of the secret in the browser's sign-in cookie. */
+  binding: string
 }
 
 /** Storage keys to delete: expired entries, then the oldest beyond `PENDING_MAX - 1`, which makes room for one more. */

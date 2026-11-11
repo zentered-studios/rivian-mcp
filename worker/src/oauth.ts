@@ -1,6 +1,7 @@
 // OAuth sign-in for MCP clients such as claude.ai. The Worker is its own authorization server;
 // its /authorize page signs in to Rivian with the existing Login and LoginWithOTP mutations.
 
+import { waitUntil } from 'cloudflare:workers'
 import {
   AuthorizationError,
   type AuthRequest,
@@ -8,12 +9,9 @@ import {
   type OAuthHelpers,
 } from '@cloudflare/workers-oauth-provider'
 import { esc, merge } from './html.ts'
-import { type StartResult, sameEmail } from './logins.ts'
-
-/** The one scope this server grants. */
-export const SCOPE = 'mcp'
-/** Every grant belongs to the one owner account (`ownerEmail` in logins.ts). */
-const USER_ID = 'owner'
+import { type FinishResult, type StartResult, sameEmail } from './logins.ts'
+import { PENDING_TTL_MS } from './pending.ts'
+import { SCOPE, USER_ID } from './provider.ts'
 
 const recorder = (env: Env) => env.RECORDER.get(env.RECORDER.idFromName('default'))
 
@@ -47,7 +45,7 @@ export async function handleAuthorize(
       return await submitPassword(request, env, oauth)
     }
     if (pathname === '/authorize/otp' && request.method === 'POST') {
-      return await submitOtp(request, env, oauth)
+      return await submitOtp(request, env)
     }
     return new Response('Not found', { status: 404 })
   } catch (error) {
@@ -57,13 +55,7 @@ export async function handleAuthorize(
     if (error instanceof AuthorizationError || error instanceof CimdFetchError) {
       const message =
         error instanceof AuthorizationError ? error.description : 'This app could not be verified.'
-      return page(
-        'Sign-in failed',
-        `<p class="lead">${esc(message)}</p><p class="lead">Start again from your app.</p>`,
-        {
-          status: 400,
-        },
-      )
+      return failed(message)
     }
     throw error
   }
@@ -130,61 +122,77 @@ async function submitPassword(request: Request, env: Env, oauth: OAuthHelpers): 
     )
   }
   if (await overLimit(env, 'global')) return tooManyAttempts()
+  // The code step completes the authorization from the Recorder, bound to this browser by a
+  // cookie whose hash is stored with the pending login.
+  const secret = randomSecret()
+  const origin = new URL(request.url).origin
+  const pending = { request: approved.request, origin, binding: await sha256Hex(secret) }
   let login: StartResult
   try {
-    login = await recorder(env).startPendingLogin(email.trim(), String(form.get('password') ?? ''))
+    login = await recorder(env).startPendingLogin(
+      email.trim(),
+      String(form.get('password') ?? ''),
+      pending,
+    )
   } catch (error) {
     return signInPage(oauth, approved.request, rivianError(error), approved.headers)
   }
   if (login.result === 'logged_in') return complete(oauth, approved.request, approved.headers)
-  return otpPage(oauth, approved.request, approved.headers, login.pendingId)
+  const headers = new Headers(approved.headers)
+  headers.append('Set-Cookie', bindingCookie(login.pendingId, secret))
+  return otpPage(headers, login.pendingId)
 }
 
-async function submitOtp(request: Request, env: Env, oauth: OAuthHelpers): Promise<Response> {
-  // Works once, only in the browser that passed the password step.
-  const {
-    request: authRequest,
-    data: pendingId,
-    headers,
-  } = await oauth.finishUpstream<string>(request)
+/**
+ * Safe to repeat. Safari can post the form twice when it fills the code from Messages, and it
+ * drops the first request. Every post for one sign-in shares the Recorder's single code check
+ * and gets the same redirect.
+ */
+async function submitOtp(request: Request, env: Env): Promise<Response> {
+  const pendingId = new URL(request.url).searchParams.get('pending') ?? ''
+  const secret = readCookie(request, cookieName(pendingId))
+  if (!PENDING_ID.test(pendingId) || !secret) {
+    return failed('This sign-in was not started in this browser.')
+  }
+  const headers = new Headers({ 'Cache-Control': 'no-store' })
   const form = await request.formData()
   const code = String(form.get('code') ?? '').trim()
-  if (!/^\d{4,8}$/.test(code)) {
-    return otpPage(oauth, authRequest, headers, pendingId, 'Enter the code from Rivian.')
-  }
+  if (!/^\d{4,8}$/.test(code)) return otpPage(headers, pendingId, 'Enter the code from Rivian.')
   if (await throttled(request, env)) {
-    return otpPage(oauth, authRequest, headers, pendingId, 'Too many attempts. Wait a minute.')
+    return otpPage(headers, pendingId, 'Too many attempts. Wait a minute.')
   }
+  const check = recorder(env).finishPendingLogin(pendingId, await sha256Hex(secret), code)
+  // Lets the check finish after the browser drops this request; a repeated post picks it up.
+  waitUntil(check.catch(() => {}))
+  let finished: FinishResult
   try {
-    await recorder(env).finishPendingLogin(pendingId, code)
+    finished = await check
   } catch (error) {
-    return otpPage(oauth, authRequest, headers, pendingId, rivianError(error))
+    return otpPage(headers, pendingId, rivianError(error))
   }
-  return complete(oauth, authRequest, headers)
+  switch (finished.result) {
+    case 'expired':
+      return failed('This sign-in expired or was started in another browser.')
+    case 'other_code':
+      return otpPage(headers, pendingId, 'This sign-in already uses a different code.')
+    case 'retry':
+      return otpPage(headers, pendingId, 'Rivian accepted the code. Submit it again to finish.')
+  }
+  headers.append('Set-Cookie', clearCookie(pendingId))
+  headers.set('Location', finished.redirectTo)
+  return new Response(null, { status: 302, headers })
 }
 
-async function otpPage(
-  oauth: OAuthHelpers,
-  authRequest: AuthRequest,
-  headers: Headers,
-  pendingId: string,
-  error?: string,
-): Promise<Response> {
-  // beginUpstream carries the approved request and the pending Rivian login to the OTP post,
-  // bound to this browser.
-  const { state, headers: bound } = await oauth.beginUpstream(authRequest, {
-    data: pendingId,
-    headers,
-  })
+function otpPage(headers: Headers, pendingId: string, error?: string): Response {
   return page(
     'Enter your Rivian code',
     `<p class="lead">Rivian sent a one-time code to your phone or email.</p>
 ${errorLine(error)}
-<form method="post" action="/authorize/otp?state=${encodeURIComponent(state)}">
+<form method="post" action="/authorize/otp?pending=${encodeURIComponent(pendingId)}">
   <label>Code <input class="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="\\d{4,8}" maxlength="8" autofocus required></label>
   <div class="actions"><button class="primary">Verify and connect</button></div>
 </form>`,
-    { headers: bound, step: 'Step 2 of 2 · One-time code' },
+    { headers, step: 'Step 2 of 2 · One-time code' },
   )
 }
 
@@ -202,6 +210,47 @@ async function complete(
   })
   headers.set('Location', redirectTo)
   return new Response(null, { status: 302, headers })
+}
+
+const failed = (message: string) =>
+  page(
+    'Sign-in failed',
+    `<p class="lead">${esc(message)}</p><p class="lead">Start again from your app.</p>`,
+    { status: 400 },
+  )
+
+/** `crypto.randomUUID()` in `Recorder.loginDeps`. Also keeps the cookie name valid. */
+const PENDING_ID = /^[0-9a-f-]{36}$/
+const cookieName = (pendingId: string) => `__Host-rivian-signin-${pendingId}`
+
+function bindingCookie(pendingId: string, secret: string): string {
+  const maxAge = PENDING_TTL_MS / 1000
+  return `${cookieName(pendingId)}=${secret}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${maxAge}`
+}
+
+const clearCookie = (pendingId: string) =>
+  `${cookieName(pendingId)}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0`
+
+function readCookie(request: Request, name: string): string | undefined {
+  for (const part of (request.headers.get('Cookie') ?? '').split(';')) {
+    const at = part.indexOf('=')
+    if (at !== -1 && part.slice(0, at).trim() === name)
+      return part.slice(at + 1).trim() || undefined
+  }
+  return undefined
+}
+
+function randomSecret(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32))
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 function rivianError(error: unknown): string {
