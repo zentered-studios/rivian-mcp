@@ -511,16 +511,19 @@ Rivian announced Rivian Assistant on 2026-05-12 as an in-car voice assistant ("H
 Four read-only probe rounds found no assistant, chat, conversation, or intelligence surface on the consumer GraphQL HTTP API. Subscriptions were not probed for assistant topics. Do not re-run blind name-guessing; capture the app or car traffic instead.
 
 **Probe conditions:**
+
 - Introspection is disabled on every reachable endpoint (`__schema` / `__type` return `GRAPHQL_VALIDATION_FAILED`).
 - The gateway gives no "did you mean" suggestions. A misspelled field returns a generic `GRAPHQL_VALIDATION_FAILED`. Name-hint discovery does not work here.
 - The gateway hides field-level detail: `{ currentUser { <missing> } }` returns the same generic error for a real-but-needs-subselection field and a nonexistent one. Only object fields can be told apart, by whether a subselection changes the error.
 
 **Endpoint paths on `rivian.com/api/gql/` (POST `{ __typename }`):**
+
 - Exist (200, `Query`): `gateway`, `chrg/user`, `orders`, `content`.
 - Does not exist (404 marketing HTML, same as a bogus control): `trips`, and every assistant-style name tried (`assistant`, `ai`, `chat`, `rai`, `intelligence`, `conversation`, `conversations`, `ria`, `assistant/user`, `ai/user`, `support`, `service`, `notifications`).
 - Inconclusive: `t2d` returned a 503 nginx page, likely a transient outage. Retry later.
 
 **Fields:**
+
 - `currentUser.settings` exists and exposes `distanceUnit`, `temperatureUnit` and `pressureUnit` (see the top of this file). The probe reported its type as `UserSettingsMap`; no other source in this repo confirms that name. Assistant subfields were not probed. It is the most plausible place for an assistant settings toggle on the consumer API.
 - Confirmed absent on the `orders` root (its errors name the field): `assistant`, `intelligence`, `aiAssistant`.
 - Inconclusive on the gateway `currentUser` (generic error, same as control): `preferences`, `assistant`, `assistantSettings`, `intelligence`, `intelligenceSettings`, `rivianIntelligence`, `aiSettings`, `aiPreferences`, `memory`, `voiceAssistant`, `features`, `enrolledFeatures`, `featureFlags`.
