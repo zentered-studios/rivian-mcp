@@ -213,7 +213,9 @@ test('a check lost after Rivian accepted the code resumes from the stored sessio
   deps.activate = () => new Promise<void>(() => {})
   void finish('id1', 'code-for-otp-a')
   const verified = () => pending.get(`${PENDING_PREFIX}id1`)?.verifiedCode
-  for (let i = 0; i < 100 && !verified(); i++) await new Promise((r) => setImmediate(r))
+  // The code hash comes from crypto.subtle, which finishes off the event loop. Wait on the clock.
+  for (const start = Date.now(); !verified() && Date.now() - start < 5000; )
+    await new Promise((r) => setTimeout(r, 1))
   assert.ok(verified(), 'the accepted code is stored before activation')
   deps.inFlight.clear()
   deps.activate = activate
