@@ -65,7 +65,7 @@
     "@types/tz-lookup": "^6.1.2",
     "esbuild": "^0.28.2",
     "leaflet": "^1.9.4",
-    "semantic-release": "^25.0.9",
+    "semantic-release": "^26.0.1",
     "typescript": "^7.0.2",
     "tz-lookup": "^6.1.25",
     "wrangler": "^4.150.0"
